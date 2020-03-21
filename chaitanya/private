@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+# ----------------------------------------------------------------------------
+# NOTE: this script requires "jq" be installed: sudo yum -y install jq
+# GitLab Documentation: https://docs.gitlab.com/ce/api/projects.html#list-projects
+# ############################################################################
+umask 002
+
+BASE_PATH="http://git.sys.cigna.com/"
+PROJECT_SEARCH_PARAM="*"
+LOG_FILE="/dev/null"
+FILENAME="repos.json"
+TARGET_DIR=/opt/ansible/roles
+
+if [ ! -d $TARGET_DIR ]; then
+  mkdir $TARGET_DIR;
+fi
+
+cd $TARGET_DIR;
+
+function log {
+  echo $(date +"%m-%d-%Y %H:%M") - $1
+}
+
+function fetch {
+    log "about to Curl...${BASE_PATH}api/v4/groups/$1/projects?private_token=$GITLAB_PRIVATE_TOKEN"
+
+
+    curl -s "${BASE_PATH}api/v4/groups/$1/projects?private_token=$GITLAB_PRIVATE_TOKEN" \
+        | jq --raw-output --compact-output ".[] | select(.namespace.name == \"$1\") | { "path": .path, "git": .ssh_url_to_repo }" > "$FILENAME"
+
+    while read repo; do
+        THEPATH=$(echo "$repo" | jq -r ".path")
+        log "YOUR PATH: $THEPATH"
+        GIT=$(echo "$repo" | jq -r ".git")
+        log "YOUR REPO: $GIT"
+
+        if [ ! -d "$THEPATH" ]; then
+            log "Cloning $THEPATH ( $GIT )"
+            /usr/bin/git clone "$GIT" --quiet
+        else
+            log "Pulling $THEPATH"
+            (cd "$THEPATH" && /usr/bin/git reset --hard && /usr/bin/git pull --quiet)
+        fi
+    done < "$FILENAME"
+
+    log "--- Repositories Processed ---"
+    cat "$FILENAME"
+}
+
+if [ -z "$GITLAB_PRIVATE_TOKEN" ]; then
+    log "Please set the environment variable GITLAB_PRIVATE_TOKEN"
+    log "See ${BASE_PATH}profile/account"
+    exit 1
+fi
+
+pushd $TARGET_DIR
+
+# ############################################################################
+# Enter the name of the repository groups to fetch roles from
+# ############################################################################
+(
+    log "------------- START -------------"
+    fetch "Group-IT-Galaxy"
+    #fetch "Galaxy"
+    log "-------------- END --------------"
+) 2>&1 | tee -a "$LOG_FILE";
+
+rm "$FILENAME"
+popd
